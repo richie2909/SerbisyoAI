@@ -9,9 +9,10 @@ from huggingface_hub import InferenceClient
 import threading
 import time
 from threading import Lock
+import logging
 
 # -------------------- Config --------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL")  # e.g., https://xyz.supabase.co/rest/v1
+SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
@@ -24,8 +25,9 @@ if not SUPABASE_URL or not SUPABASE_KEY or not HF_TOKEN:
     raise RuntimeError("SUPABASE_URL, SUPABASE_KEY, and HF_TOKEN must be set.")
 
 lock = Lock()
+logging.basicConfig(level=logging.INFO)
 
-# -------------------- Fetch posts from Supabase --------------------
+# -------------------- Fetch posts --------------------
 def fetch_posts():
     headers = {
         "apikey": SUPABASE_KEY,
@@ -45,10 +47,9 @@ def fetch_posts():
     for sp in saved_posts:
         post = posts.get(sp['post_id'])
         if post:
-            merged_text = f"{post.get('page_name','')} {post.get('content','')} {post.get('permalink','')}".strip()
-            if merged_text:
-                merged_texts.append(merged_text)
-
+            merged = f"{post.get('page_name','')} {post.get('content','')} {post.get('permalink','')}".strip()
+            if merged:
+                merged_texts.append(merged)
     return merged_texts
 
 # -------------------- Embeddings & FAISS --------------------
@@ -62,6 +63,7 @@ def build_index(texts):
     faiss.write_index(idx, "posts.index")
     with open("texts.pkl", "wb") as f:
         pickle.dump(texts, f)
+    logging.info(f"FAISS index built with {len(texts)} entries.")
     return idx
 
 def refresh_index_periodically():
@@ -73,9 +75,9 @@ def refresh_index_periodically():
                 if set(new_texts) != set(texts):
                     texts = new_texts
                     index = build_index(texts)
-                    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] FAISS index updated dynamically.")
+                    logging.info(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] FAISS index updated dynamically.")
         except Exception as e:
-            print(f"Error refreshing index: {e}")
+            logging.error(f"Error refreshing index: {e}")
         time.sleep(REFRESH_INTERVAL)
 
 # -------------------- Initialize --------------------
@@ -89,7 +91,6 @@ else:
     texts = fetch_posts()
     index = build_index(texts)
 
-# Start dynamic refresh in background
 threading.Thread(target=refresh_index_periodically, daemon=True).start()
 
 # -------------------- FastAPI --------------------
@@ -124,16 +125,22 @@ def ask_question(q: Question):
             top_p=0.95
         )
 
-        answer = ""
-        for choice in response.choices:
-            if choice.message and choice.message.content:
-                answer += choice.message.content
+        answer = "".join(
+            choice.message.content for choice in response.choices if choice.message and choice.message.content
+        )
 
         return {"answer": answer.strip(), "context": relevant_context}
 
     except Exception as e:
+        logging.error(f"Error handling /ask request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def root():
     return {"message": "Posts AI Q&A service running"}
+
+# -------------------- Entry point for container --------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
