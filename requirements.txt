@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pandas
+sentence-transformers
+faiss-cpu
+transformers
+torch
+pydantic
+python-dotenv
+
