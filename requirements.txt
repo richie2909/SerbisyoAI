@@ -1,11 +1,9 @@
 fastapi
-uvicorn[standard]
-sqlalchemy
+uvicorn
 pandas
+sqlalchemy
+psycopg2-binary
 sentence-transformers
 faiss-cpu
-transformers
-torch
-pydantic
+huggingface-hub
 python-dotenv
-
