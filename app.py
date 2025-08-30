@@ -8,6 +8,7 @@ import pickle
 from huggingface_hub import InferenceClient
 import threading
 import time
+from threading import Lock
 
 # -------------------- Config --------------------
 SUPABASE_URL = os.getenv("SUPABASE_URL")  # e.g., https://xyz.supabase.co/rest/v1
@@ -22,6 +23,8 @@ REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", 300))  # seconds
 if not SUPABASE_URL or not SUPABASE_KEY or not HF_TOKEN:
     raise RuntimeError("SUPABASE_URL, SUPABASE_KEY, and HF_TOKEN must be set.")
 
+lock = Lock()
+
 # -------------------- Fetch posts from Supabase --------------------
 def fetch_posts():
     headers = {
@@ -29,6 +32,7 @@ def fetch_posts():
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Accept": "application/json"
     }
+
     posts_resp = requests.get(f"{SUPABASE_URL}/rest/v1/posts", headers=headers)
     saved_resp = requests.get(f"{SUPABASE_URL}/rest/v1/saved_posts", headers=headers)
     posts_resp.raise_for_status()
@@ -39,18 +43,19 @@ def fetch_posts():
 
     merged_texts = []
     for sp in saved_posts:
-        post = posts.get(sp['post_id'], {})
-        merged_text = f"{post.get('page_name','')} {post.get('content','')} {post.get('permalink','')}"
-        merged_texts.append(merged_text)
+        post = posts.get(sp['post_id'])
+        if post:
+            merged_text = f"{post.get('page_name','')} {post.get('content','')} {post.get('permalink','')}".strip()
+            if merged_text:
+                merged_texts.append(merged_text)
 
     return merged_texts
 
 # -------------------- Embeddings & FAISS --------------------
-from threading import Lock
-lock = Lock()
-
 def build_index(texts):
     embeddings = embed_model.encode(texts, convert_to_numpy=True)
+    if embeddings.ndim == 1:
+        embeddings = embeddings.reshape(1, -1)
     dim = embeddings.shape[1]
     idx = faiss.IndexFlatL2(dim)
     idx.add(embeddings)
@@ -97,6 +102,9 @@ class Question(BaseModel):
 def ask_question(q: Question):
     try:
         query_vec = embed_model.encode([q.text])
+        if query_vec.ndim == 1:
+            query_vec = query_vec.reshape(1, -1)
+
         with lock:
             D, I = index.search(query_vec, k=TOP_K)
             relevant_context = [texts[i][:MAX_CONTEXT_CHARS] for i in I[0]]
